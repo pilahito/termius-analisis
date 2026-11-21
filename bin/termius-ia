@@ -154,7 +154,9 @@ preparar() {
     mkdir -p "$destino"
     echo "· extrayendo el .deb…"
     (cd "$destino" && ar x "$deb" data.tar.xz >/dev/null 2>&1 || { echo "fallo al extraer con ar" >&2; exit 1; })
-    tar -xJf "$destino/data.tar.xz" -C "$destino" ./opt/Termius/resources/app.asar 2>/dev/null
+    tar -xJf "$destino/data.tar.xz" -C "$destino" \
+        ./opt/Termius/resources/app.asar \
+        ./opt/Termius/resources/app.asar.unpacked 2>/dev/null
     echo "· sacando app.asar…"
     python3 - "$destino" <<'PY'
 import json, struct, sys
@@ -177,6 +179,22 @@ def extraer(nodo, ruta=Path()):
             off = int(info.get("offset", "0")); tam = info.get("size", 0)
             destino.write_bytes(datos[inicio + off: inicio + off + tam])
 extraer(indice)
+# Las entradas marcadas "unpacked" (módulos nativos) NO están dentro del
+# app.asar: su contenido real vive en app.asar.unpacked. Si no se copian,
+# quedan ficheros truncados (p. ej. package.json inválidos) y la app no arranca.
+desempaquetado = asar.parent / "app.asar.unpacked"
+if desempaquetado.is_dir():
+    import shutil
+    copiados = 0
+    for fichero in desempaquetado.rglob("*"):
+        if not fichero.is_file():
+            continue
+        relativo = fichero.relative_to(desempaquetado)
+        objetivo = raiz / relativo
+        objetivo.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(fichero, objetivo)
+        copiados += 1
+    print(f"  + {copiados} ficheros desempaquetados (módulos nativos)")
 print(f"  {raiz} ({sum(1 for _ in raiz.rglob('*') if _.is_file())} ficheros)")
 PY
     echo "· embelleciendo los paquetes principales (puede tardar un rato)…"

@@ -69,6 +69,19 @@ termius-recuperar                   # fuentes de librerías + estructura
 termius-ia preguntar "…"            # pregunta al código recuperado
 ```
 
+## Detalle importante al reempaquetar
+
+El `app.asar` original tiene **77 entradas "unpacked"** (módulos nativos como
+`libtermius`, `keytar`, `libfido2`): su contenido **no está dentro del asar**,
+vive en `app.asar.unpacked/`. Si se extrae solo el asar, esos ficheros quedan
+truncados (por ejemplo, `package.json` inválidos) y la app reconstruida **no
+arranca**: falla con *"Invalid package config …/node_modules/@termius/libtermius/package.json"*.
+
+Solución ya incluida en `termius-ia preparar`: copia `app.asar.unpacked/` sobre
+el árbol extraído. Con eso, reempaquetar con `@electron/asar --unpack-dir
+node_modules` produce un asar que **arranca correctamente** (comprobado: se ve
+la pantalla de bienvenida de Termius).
+
 ## Conclusión honesta
 
 Si buscas "el código fuente de Termius", no existe en el paquete y ninguna
