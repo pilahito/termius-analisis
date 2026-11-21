@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# termius-ia — pregunta cosas al código de Termius con una IA LOCAL (Ollama).
+#
+# Termius es una app Electron empaquetada: NO trae el código fuente original,
+# solo JavaScript minificado. Este script busca en la copia legible y le pasa
+# los trozos relevantes a un modelo local (por defecto qwen2.5-coder:14b), así
+# que nada sale de tu equipo.
+#
+# Antes de usarlo (una vez):
+#   termius-ia preparar      extrae y embellece el .deb que le pases
+#
+# Uso:
+#   termius-ia buscar "texto"            busca en el código legible (con contexto)
+#   termius-ia archivo <fichero>         lista ficheros legibles (los más grandes)
+#   termius-ia preguntar "pregunta"      busca en todo el código y responde
+#   termius-ia explicar <fichero> ["pregunta"]  analiza un fichero concreto
+#   termius-ia modelos                   modelos locales disponibles
+#   termius-ia preparar <Termius.deb> [destino]
+#
+# Variables:
+#   MODELO=qwen2.5-coder:14b   modelo de Ollama a usar
+#   DIR=~/Termius-analisis     carpeta de trabajo
+set -uo pipefail
+
+DIR="${DIR:-$HOME/Termius-analisis}"
+LEGIBLE="$DIR/legible"
+MODELO="${MODELO:-qwen2.5-coder:14b}"
+OLLAMA="${OLLAMA:-http://127.0.0.1:11434}"
+
+uso() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+comprobar() {
+    command -v ollama >/dev/null 2>&1 || { echo "Falta ollama. Instálalo con: sudo pacman -S ollama" >&2; exit 1; }
+    curl -s -m 3 "$OLLAMA/api/tags" >/dev/null 2>&1 || {
+        echo "Ollama no responde en $OLLAMA. Arráncalo: systemctl --user start ollama" >&2
+        exit 1
+    }
+}
+
+modelos() {
+    comprobar
+    curl -s "$OLLAMA/api/tags" | python3 -c 'import json, sys
+for m in json.load(sys.stdin).get("models", []):
+    print("%-26s %.1f GB" % (m["name"], m.get("size", 0) / 1e9))
+'
+}
+
+preguntar_modelo() {
+    # $1 = pregunta, $2 = contexto (código)
+    python3 - "$MODELO" "$OLLAMA" "$1" "$2" <<'PY'
+import json, sys, urllib.request
+modelo, servidor, pregunta, contexto = sys.argv[1:5]
+prompt = (
+    "Eres un experto en ingeniería inversa de apps Electron. Te doy un trozo de "
+    "JavaScript minificado pero embellecido (variables renombradas a letras). "
+    "Responde en español, breve y técnico, y di claramente qué es observación y "
+    "qué es suposición.\n\n"
+    f"PREGUNTA: {pregunta}\n\nCÓDIGO:\n{contexto[:24000]}"
+)
+cuerpo = json.dumps({"model": modelo, "prompt": prompt, "stream": False,
+                     "options": {"temperature": 0.2, "num_predict": 700}}).encode()
+peticion = urllib.request.Request(servidor + "/api/generate", data=cuerpo,
+                                  headers={"Content-Type": "application/json"})
+with urllib.request.urlopen(peticion, timeout=600) as r:
+    print((json.loads(r.read().decode()).get("response") or "").strip())
+PY
+}
+
+buscar() {
+    local texto="${1:?uso: termius-ia buscar \"texto\"}"
+    [ -d "$LEGIBLE" ] || { echo "No hay código legible. Ejecuta: termius-ia preparar <Termius.deb>" >&2; exit 1; }
+    grep -rn --include="*.js" -m 3 -- "$texto" "$LEGIBLE" 2>/dev/null | head -14
+}
+
+listar_archivos() {
+    ls -lhS "$LEGIBLE"/*.js 2>/dev/null | awk '{printf "%6s  %s\n", $5, $9}' | sed "s|$LEGIBLE/||"
+}
+
+explicar() {
+    local fichero="$1"; local pregunta="${2:-¿Qué hace este código? Resume sus partes principales.}"
+    local ruta="$LEGIBLE/$fichero"
+    [ -f "$ruta" ] || ruta="$(find "$LEGIBLE" -name "$fichero" | head -1)"
+    [ -f "$ruta" ] || { echo "No encuentro $fichero en $LEGIBLE" >&2; exit 1; }
+    comprobar
+    local contexto
+    contexto="$(head -c 60000 "$ruta")"
+    preguntar_modelo "$pregunta" "$contexto"
+}
+
+preguntar() {
+    local pregunta="" modelo="$MODELO" motor="local"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --cf|--nube|--cloudflare) motor="cf"; shift ;;
+            -m|--modelo) modelo="${2:-$MODELO}"; shift 2 ;;
+            *) pregunta="${pregunta:+$pregunta }$1"; shift ;;
+        esac
+    done
+    [ -n "$pregunta" ] || { echo "uso: termius-ia preguntar \"pregunta\" [--cf] [-m modelo]" >&2; exit 1; }
+    comprobar
+    exec python3 /usr/local/lib/termius-ia/consulta.py "$pregunta" "$modelo" "$motor"
+}
+
+explicar() {
+    local fichero="$1"; shift || true
+    local pregunta="¿Qué hace este código? Resume sus partes principales." modelo="$MODELO" motor="local"
+    if [ $# -gt 0 ]; then pregunta="$*"; fi
+    case "$pregunta" in *--cf*) motor="cf"; pregunta="${pregunta%--cf}" ;; esac
+    local ruta="$LEGIBLE/$fichero"
+    [ -f "$ruta" ] || ruta="$(find "$LEGIBLE" -name "$fichero" | head -1)"
+    [ -f "$ruta" ] || { echo "No encuentro $fichero en $LEGIBLE" >&2; exit 1; }
+    comprobar
+    local contexto; contexto="$(head -c 60000 "$ruta")"
+    if [ "$motor" = "cf" ]; then
+        python3 - "$pregunta" "$contexto" <<'PY2'
+import sys
+sys.path.insert(0, "/usr/local/lib/termius-ia")
+import nube
+pregunta, contexto = sys.argv[1], sys.argv[2]
+prompt = ("Eres experto en ingeniería inversa de apps Electron. Te doy JavaScript "
+          "minificado embellecido de Termius. Responde en español, breve, separando "
+          "OBSERVACIÓN de SUPOSICIÓN.\n\nPREGUNTA: " + pregunta + "\n\nCÓDIGO:\n" + contexto[:24000])
+print("[motor: Cloudflare Workers AI]", file=sys.stderr)
+print(nube.consultar(prompt))
+PY2
+        return
+    fi
+    preguntar_modelo "$pregunta" "$contexto"
+}
+
+motores() {
+    echo "Local (Ollama):"
+    curl -s -m 3 "$OLLAMA/api/tags" | python3 -c 'import json, sys
+for m in json.load(sys.stdin).get("models", []):
+    print("   %-26s %.1f GB" % (m["name"], m.get("size", 0) / 1e9))' 2>/dev/null || echo "   (Ollama no responde)"
+    echo
+    echo "Nube (Cloudflare Workers AI):"
+    python3 - <<'PY3'
+import sys
+sys.path.insert(0, "/usr/local/lib/termius-ia")
+try:
+    import nube
+    print("   modelo:", nube.MODELO, "| cuenta:", nube.CUENTA[:8] + "…")
+    print("   token:", "configurado" if nube.token() else "FALTA")
+except Exception as error:
+    print("   no disponible:", error)
+PY3
+}
+
+preparar() {
+    local deb="${1:?uso: termius-ia preparar <Termius.deb> [carpeta]}"
+    local destino="${2:-$HOME/Termius-analisis}"
+    [ -f "$deb" ] || { echo "No existe $deb" >&2; exit 1; }
+    mkdir -p "$destino"
+    echo "· extrayendo el .deb…"
+    (cd "$destino" && ar x "$deb" data.tar.xz >/dev/null 2>&1 || { echo "fallo al extraer con ar" >&2; exit 1; })
+    tar -xJf "$destino/data.tar.xz" -C "$destino" ./opt/Termius/resources/app.asar 2>/dev/null
+    echo "· sacando app.asar…"
+    python3 - "$destino" <<'PY'
+import json, struct, sys
+from pathlib import Path
+base = Path(sys.argv[1])
+asar = base / "opt/Termius/resources/app.asar"
+datos = asar.read_bytes()
+_, tam_payload, _, tam_real = struct.unpack("<4I", datos[:16])
+indice = json.loads(datos[16:16+tam_real])
+inicio = 8 + tam_payload
+raiz = base / "app"
+def extraer(nodo, ruta=Path()):
+    for nombre, info in (nodo.get("files") or {}).items():
+        destino = raiz / ruta / nombre
+        if "files" in info:
+            destino.mkdir(parents=True, exist_ok=True)
+            extraer(info, ruta / nombre)
+        else:
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            off = int(info.get("offset", "0")); tam = info.get("size", 0)
+            destino.write_bytes(datos[inicio + off: inicio + off + tam])
+extraer(indice)
+print(f"  {raiz} ({sum(1 for _ in raiz.rglob('*') if _.is_file())} ficheros)")
+PY
+    echo "· embelleciendo los paquetes principales (puede tardar un rato)…"
+    mkdir -p "$destino/legible"
+    ls -S "$destino"/app/ui-process/assets/*.js 2>/dev/null | head -8 > /tmp/termius_grandes.txt
+    ls -S "$destino"/app/main-process/*.js "$destino"/app/background-process/*.js 2>/dev/null | head -4 >> /tmp/termius_grandes.txt
+    while read -r f; do
+        [ -f "$f" ] || continue
+        b="$(basename "$f" .js)"
+        [ -f "$destino/legible/$b.js" ] && continue
+        npx --yes prettier@3 --parser babel "$f" > "$destino/legible/$b.js" 2>/dev/null
+        echo "   $b.js"
+    done < /tmp/termius_grandes.txt
+    echo "Listo. Prueba:  termius-ia archivo   y   termius-ia preguntar \"...\""
+}
+
+case "${1:-}" in
+    -h|--help|"") uso 0 ;;
+    modelos) modelos ;;
+    motores|modelos-nube) motores ;;
+    buscar) shift; buscar "$@" ;;
+    archivo|archivos|listar) listar_archivos ;;
+    explicar) shift; explicar "$@" ;;
+    preguntar) shift; preguntar "$@" ;;
+    preparar) shift; preparar "$@" ;;
+    *) echo "Orden no conocida: $1" >&2; uso 1 ;;
+esac

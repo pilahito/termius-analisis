@@ -1,0 +1,8 @@
+# Nunca subir el paquete ni el código extraído de Termius
+*.deb
+app/
+opt/
+legible/
+data.tar.xz
+control.tar.xz
+Termius.deb
