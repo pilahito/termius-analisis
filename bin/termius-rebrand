@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# termius-rebrand — cambia el nombre visible de una copia local de Termius.
+#
+# ⚠️ SOLO PARA USO PERSONAL. Termius es software propietario: puedes probar
+# cambios en tu equipo, pero NO puedes redistribuir la copia renombrada ni
+# publicarla. Esto no elimina su licencia ni sus servidores.
+#
+# Qué hace: edita el `package.json` de la app extraída (name + productName) y
+# reempaqueta el `app.asar`. Electron toma de ahí el nombre de la aplicación y
+# el título por defecto de la ventana.
+#
+# Uso:
+#   termius-rebrand <carpeta-app> "<Nuevo Nombre>" [salida.asar]
+#
+# Ejemplo:
+#   termius-rebrand ~/Termius-analisis/app "Termius Local"
+set -uo pipefail
+
+APP="${1:?uso: termius-rebrand <carpeta-app> \"<Nuevo Nombre>\" [salida.asar]}"
+NOMBRE="${2:?falta el nombre nuevo}"
+SALIDA="${3:-/tmp/termius-rebrand.asar}"
+
+[ -d "$APP" ] || { echo "No existe la carpeta $APP" >&2; exit 1; }
+[ -f "$APP/package.json" ] || { echo "No parece una app Electron (falta package.json)" >&2; exit 1; }
+
+echo "· cambiando el nombre a «$NOMBRE»…"
+python3 - "$APP/package.json" "$NOMBRE" <<'PY'
+import json, sys
+from pathlib import Path
+ruta, nombre = Path(sys.argv[1]), sys.argv[2]
+datos = json.loads(ruta.read_text(encoding="utf-8"))
+antes = datos.get("name"), datos.get("productName")
+datos["name"] = nombre
+datos["productName"] = nombre
+ruta.write_text(json.dumps(datos, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(f"  name: {antes[0]!r} → {nombre!r}")
+print(f"  productName: {antes[1]!r} → {nombre!r}")
+PY
+
+echo "· reempaquetando app.asar…"
+rm -rf "$SALIDA" "$SALIDA.unpacked"
+npx --yes @electron/asar pack "$APP" "$SALIDA" --unpack-dir "node_modules" >/dev/null 2>&1 || {
+    echo "falló el empaquetado (¿sin red para npx?)" >&2
+    exit 1
+}
+echo
+echo "Listo: $SALIDA ($(du -h "$SALIDA" | cut -f1))"
+echo
+echo "Para aplicarlo a una copia instalada:"
+echo "  cp \"$SALIDA\" ~/.local/opt/termius-fork/resources/app.asar"
+echo "  cp -a \"$SALIDA.unpacked/.\" ~/.local/opt/termius-fork/resources/app.asar.unpacked/"
+echo
+echo "Recuerda: copia modificada de software propietario. Uso personal, no redistribuir."

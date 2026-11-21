@@ -16,6 +16,7 @@ método reproducible para estudiarlo.
 | [`docs/ESTRUCTURA-MODULOS.md`](docs/ESTRUCTURA-MODULOS.md) | los 743 módulos originales de Termius |
 | [`bin/termius-recuperar`](bin/termius-recuperar) | recupera fuentes de librerías + estructura de módulos |
 | [`bin/termius-repack`](bin/termius-repack) | reconstruye un `.deb` instalable |
+| [`bin/termius-rebrand`](bin/termius-rebrand) | renombra la copia local (`name` + `productName`) y reempaqueta — **uso personal**, no redistribuir |
 | [`bin/termius-ia`](bin/termius-ia) | extrae el `.deb`, embellece el JavaScript y responde preguntas sobre el código |
 | [`lib/consulta.py`](lib/consulta.py) | recuperación de fragmentos relevantes + pregunta al modelo |
 | [`lib/nube.py`](lib/nube.py) | motor opcional en la nube (Cloudflare Workers AI) |
