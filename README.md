@@ -12,7 +12,11 @@ método reproducible para estudiarlo.
 | Ruta | Contenido |
 |---|---|
 | [`docs/INFORME.md`](docs/INFORME.md) | informe completo: arquitectura, conexiones, cifrado, seguridad y límites |
-| [`bin/termius-ia`](bin/termius-ia) | utilidad que extrae el `.deb`, embellece el JavaScript y responde preguntas sobre el código |
+| [`docs/RECUPERACION.md`](docs/RECUPERACION.md) | qué código se puede recuperar de verdad (y qué no) |
+| [`docs/ESTRUCTURA-MODULOS.md`](docs/ESTRUCTURA-MODULOS.md) | los 743 módulos originales de Termius |
+| [`bin/termius-recuperar`](bin/termius-recuperar) | recupera fuentes de librerías + estructura de módulos |
+| [`bin/termius-repack`](bin/termius-repack) | reconstruye un `.deb` instalable |
+| [`bin/termius-ia`](bin/termius-ia) | extrae el `.deb`, embellece el JavaScript y responde preguntas sobre el código |
 | [`lib/consulta.py`](lib/consulta.py) | recuperación de fragmentos relevantes + pregunta al modelo |
 | [`lib/nube.py`](lib/nube.py) | motor opcional en la nube (Cloudflare Workers AI) |
 

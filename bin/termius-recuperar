@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# termius-recuperar — saca de Termius TODO el código que es recuperable.
+#
+# Termius no incluye el código fuente original (no hay source maps del código de
+# la app). Lo que sí se puede recuperar:
+#
+#   1. Fuentes de las LIBRERÍAS incluidas: muchos paquetes (Azure, MSAL…) traen
+#      `sourcesContent` dentro de sus .map → es código real, no minificado.
+#   2. La ESTRUCTURA de módulos de Termius: los chunks de Vite conservan el
+#      nombre del módulo original en el fichero (p. ej. `Hosts-3f2a.js` →
+#      módulo `Hosts`).
+#   3. El JavaScript de la app embellecido (legible, pero sin nombres
+#      originales).
+#
+# Uso:
+#   termius-recuperar                # todo, con la app ya extraída en $DIR/app
+#   termius-recuperar --solo-librerias
+#   termius-recuperar --solo-estructura
+#
+# Salida en $DIR/recuperado/:
+#   fuentes-librerias/   árbol de fuentes de los paquetes con sourcemap
+#   estructura-modulos.md
+set -uo pipefail
+
+DIR="${DIR:-$HOME/Termius-analisis}"
+SALIDA="$DIR/recuperado"
+APP="$DIR/app"
+TODO=1
+for arg in "$@"; do
+    case "$arg" in
+        --solo-librerias) TODO=0 ;;
+        --solo-estructura) TODO=0 ;;
+    esac
+done
+[ -d "$APP" ] || { echo "No encuentro $APP. Ejecuta antes: termius-ia preparar <Termius.deb>" >&2; exit 1; }
+mkdir -p "$SALIDA"
+
+if [ "$TODO" = "1" ] || [[ " $* " == *" --solo-librerias "* ]]; then
+    echo "· recuperando fuentes de librerías desde sus sourcemaps…"
+    python3 - "$APP" "$SALIDA" <<'PY'
+import json, sys
+from pathlib import Path
+app, salida = Path(sys.argv[1]), Path(sys.argv[2]) / "fuentes-librerias"
+total, paquetes = 0, {}
+for m in app.rglob("*.map"):
+    if "node_modules" not in m.parts:
+        continue
+    try:
+        d = json.loads(m.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        continue
+    contenidos = d.get("sourcesContent") or []
+    if not contenidos:
+        continue
+    partes = list(m.parts)
+    i = partes.index("node_modules")
+    resto = partes[i + 1:]
+    paquete = resto[0]
+    if paquete.startswith("@") and len(resto) > 1:
+        paquete = f"{resto[0]}/{resto[1]}"
+    for fuente, codigo in zip(d.get("sources") or [], contenidos):
+        if not codigo:
+            continue
+        limpio = fuente.replace("..", "_").lstrip("./").replace("/", "_")
+        objetivo = salida / paquete / limpio
+        if objetivo.exists():
+            objetivo = salida / paquete / f"{m.parent.name}__{limpio}"
+        objetivo.parent.mkdir(parents=True, exist_ok=True)
+        objetivo.write_text(codigo, encoding="utf-8")
+        total += 1
+        paquetes[paquete] = paquetes.get(paquete, 0) + 1
+print(f"  {total} ficheros de {len(paquetes)} paquetes")
+for p, n in sorted(paquetes.items(), key=lambda x: -x[1])[:10]:
+    print(f"    {n:4d}  {p}")
+PY
+fi
+
+if [ "$TODO" = "1" ] || [[ " $* " == *" --solo-estructura "* ]]; then
+    echo "· reconstruyendo el árbol de módulos por los nombres de los chunks…"
+    python3 - "$APP" "$SALIDA" <<'PY'
+import re, sys
+from pathlib import Path
+from collections import defaultdict
+app, salida = Path(sys.argv[1]), Path(sys.argv[2])
+patron = re.compile(r"^(.*)-([0-9a-f]{8})\.js$")
+tabla = {}
+for proceso in ("ui-process", "main-process", "background-process", "utilities-process", "preload"):
+    for sub in ("assets", "src", ""):
+        base = app / proceso / sub
+        if not base.is_dir():
+            continue
+        for f in base.glob("*.js"):
+            m = patron.match(f.name)
+            nombre = m.group(1) if m else f.stem
+            if nombre in ("index", ""):
+                nombre = "(entry)"
+            clave = (proceso, nombre)
+            tam = f.stat().st_size
+            if clave not in tabla or tam > tabla[clave]:
+                tabla[clave] = tam
+por_proceso = defaultdict(list)
+for (proceso, nombre), tam in tabla.items():
+    por_proceso[proceso].append((nombre, tam))
+lineas = ["# Estructura de módulos recuperada", "",
+          "Los nombres de los *chunks* de Vite conservan el nombre del módulo",
+          "original; es lo único de la estructura fuente que sobrevive al build.", ""]
+for proceso, items in sorted(por_proceso.items()):
+    items.sort(key=lambda x: -x[1])
+    lineas += [f"## {proceso} ({len(items)} módulos)", "", "| Módulo | Tamaño |", "|---|---|"]
+    for nombre, tam in items:
+        lineas.append(f"| `{nombre}` | {tam/1024:.0f} KB |")
+    lineas.append("")
+(salida / "estructura-modulos.md").write_text("\n".join(lineas), encoding="utf-8")
+print(f"  {len(tabla)} módulos con nombre → estructura-modulos.md")
+PY
+fi
+
+echo
+echo "Recuperado en $SALIDA"
+find "$SALIDA" -maxdepth 2 -type f | head -5 | sed 's/^/  /'
