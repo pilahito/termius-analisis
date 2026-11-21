@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# termius-repack — reconstruye un .deb de Termius desde el .deb original.
+#
+# Para qué sirve: rehacer el paquete con la app tal cual (o con cambios) y que
+# siga siendo instalable. No "recupera el código fuente" (no existe en el
+# paquete): reempaqueta el mismo JavaScript, legible o modificado por ti.
+#
+# Dos modos:
+#   · directorio (por defecto): reemplaza resources/app.asar por la carpeta
+#     resources/app/ extraída. Electron la carga igual, y los módulos nativos
+#     (.node) funcionan sin líos.
+#   · --asar: vuelve a empaquetar un app.asar con la herramienta oficial
+#     (@electron/asar) y conserva app.asar.unpacked.
+#
+# Uso:
+#   termius-repack <Termius.deb> [salida.deb]
+#   termius-repack <Termius.deb> salida.deb --asar
+#
+# Requisitos: ar, tar, xz, python3 y (con --asar) npx @electron/asar.
+set -uo pipefail
+
+ENTRADA="${1:?uso: termius-repack <Termius.deb> [salida.deb] [--asar]}"
+shift || true
+SALIDA=""
+MODO="dir"
+for arg in "$@"; do
+    case "$arg" in
+        --asar) MODO="asar" ;;
+        *) SALIDA="$arg" ;;
+    esac
+done
+[ -n "$SALIDA" ] || SALIDA="${ENTRADA%.deb}-repack.deb"
+[ -f "$ENTRADA" ] || { echo "No existe $ENTRADA" >&2; exit 1; }
+
+TRABAJO="$(mktemp -d "/tmp/termius-repack.XXXXXX")"
+trap 'rm -rf "$TRABAJO"' EXIT
+echo "· espacio de trabajo: $TRABAJO"
+
+# ── 1) abrir el .deb original ───────────────────────────────────────────────
+(cd "$TRABAJO" && ar x "$ENTRADA" data.tar.xz control.tar.xz) || exit 1
+mkdir -p "$TRABAJO/raiz"
+tar -xJf "$TRABAJO/data.tar.xz" -C "$TRABAJO/raiz" 2>/dev/null
+RECURSO="$TRABAJO/raiz/opt/Termius/resources"
+
+# ── 2) conseguir la app extraída (del directorio de análisis o extrayéndola) ─
+APP_EXTRAIDA=""
+for candidata in "${DIR:-$HOME/Termius-analisis}/app" ./app; do
+    [ -d "$candidata" ] && APP_EXTRAIDA="$candidata" && break
+done
+
+if [ -z "$APP_EXTRAIDA" ]; then
+    echo "· no hay app extraída; sacándola del app.asar del paquete…"
+    APP_EXTRAIDA="$TRABAJO/app"
+    python3 - "$RECURSO/app.asar" "$APP_EXTRAIDA" <<'PY'
+import json, struct, sys
+from pathlib import Path
+origen, destino = Path(sys.argv[1]), Path(sys.argv[2])
+datos = origen.read_bytes()
+_, tam_payload, _, tam_real = struct.unpack("<4I", datos[:16])
+indice = json.loads(datos[16:16+tam_real])
+inicio = 8 + tam_payload
+def extraer(nodo, ruta=Path()):
+    for nombre, info in (nodo.get("files") or {}).items():
+        objetivo = destino / ruta / nombre
+        if "files" in info:
+            objetivo.mkdir(parents=True, exist_ok=True)
+            extraer(info, ruta / nombre)
+        else:
+            objetivo.parent.mkdir(parents=True, exist_ok=True)
+            off = int(info.get("offset", "0")); tam = info.get("size", 0)
+            objetivo.write_bytes(datos[inicio + off: inicio + off + tam])
+extraer(indice)
+PY
+    [ -d "$APP_EXTRAIDA" ] || { echo "no pude extraer la app" >&2; exit 1; }
+fi
+
+# ── 3) colocar la app en el paquete ─────────────────────────────────────────
+if [ "$MODO" = "asar" ]; then
+    echo "· reempaquetando app.asar (modo asar)…"
+    rm -f "$RECURSO/app.asar"
+    npx --yes @electron/asar pack "$APP_EXTRAIDA" "$RECURSO/app.asar" \
+        --unpack-dir "node_modules" >/dev/null 2>&1 || {
+            echo "falló el empaquetado asar; pruebo el modo directorio" >&2
+            MODO="dir"
+        }
+fi
+if [ "$MODO" = "dir" ]; then
+    echo "· usando la app como directorio (resources/app)…"
+    rm -f "$RECURSO/app.asar"
+    rm -rf "$RECURSO/app"
+    cp -a "$APP_EXTRAIDA" "$RECURSO/app"
+fi
+
+# ── 4) rehacer data.tar.xz y el .deb ────────────────────────────────────────
+echo "· comprimiendo (esto tarda un poco)…"
+(cd "$TRABAJO/raiz" && tar -cf - ./ | xz -0 -T0 -c > "$TRABAJO/data-new.tar.xz") || exit 1
+cp "$TRABAJO/control.tar.xz" "$TRABAJO/control-new.tar.xz"
+printf '2.0\n' > "$TRABAJO/debian-binary"
+(cd "$TRABAJO" && rm -f repack.deb && \
+    ar rc repack.deb debian-binary control-new.tar.xz data-new.tar.xz) || exit 1
+mv "$TRABAJO/repack.deb" "$SALIDA"
+
+echo
+echo "Listo: $SALIDA ($(du -h "$SALIDA" | cut -f1))"
+echo "Estructura:"
+ar t "$SALIDA" | sed 's/^/  /'
+echo
+echo "La app va como '$( [ "$MODO" = "asar" ] && echo app.asar || echo 'directorio resources/app' )'."
+echo "Ojo: es una copia modificada de software propietario; úsala solo para ti."

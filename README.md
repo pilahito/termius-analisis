@@ -58,6 +58,27 @@ Por defecto usa `qwen2.5-coder:14b` en Ollama. Para el motor de nube:
 
 (o las variables `CLOUDFLARE_API_KEY` y `CF_ACCOUNT_ID`).
 
+## ¿Se puede recrear la copia?
+
+**Sí, el paquete.** No el código fuente original (no está en el `.deb`), pero sí
+un `.deb` instalable con la app tal cual o con los cambios que hagas:
+
+```bash
+termius-repack Termius.deb Termius-nuevo.deb            # app como directorio
+termius-repack Termius.deb Termius-nuevo.deb --asar     # reempaquetar app.asar
+```
+
+Cómo funciona: abre el `.deb`, sustituye `resources/app.asar` por la aplicación
+extraída (o un `app.asar` nuevo), conserva el `control` original (versión 10.4.1,
+dependencias) y vuelve a montar `data.tar.xz` + `ar`. Comprobado: el paquete
+resultante mantiene la estructura y los metadatos; la app va como
+`resources/app/`, que Electron carga igual y donde los módulos nativos `.node`
+funcionan sin trucos.
+
+Sirve sobre todo para **probar cambios** (temas, textos, parches) en tu equipo.
+Ojo: es una copia modificada de software propietario; para uso personal, sin
+redistribuir.
+
 ## Qué se puede y qué no
 
 **Sí**: estructura de módulos, frameworks, canales IPC, rutas, máquina de

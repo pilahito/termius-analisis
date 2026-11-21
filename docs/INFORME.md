@@ -148,7 +148,23 @@ source maps con `sourcesContent`** (los 1.627 `.map` son `.d.ts.map` de
 
 ---
 
-## 8. Aviso legal
+## 8. ¿Se puede reconstruir la app?
+
+**Sí, a partir de lo extraído** (no hay que "reinventarla"): el `app.asar`
+contiene el JavaScript real que se ejecuta. Reempaquetarlo produce un `.deb`
+funcional:
+
+- el árbol extraído se coloca como `resources/app/` (Electron lo carga igual) o
+  se vuelve a empaquetar como `resources/app.asar`;
+- se conserva el `control` original (`Package: termius-app`, `Version: 10.4.1`,
+  `Depends: libgtk-3-0, libnotify4, …`);
+- se remonta `data.tar.xz` y el archivo `ar`.
+
+Verificado: el `.deb` reconstruido (191 MB con compresión rápida) mantiene la
+estructura y los metadatos. Lo que **no** se puede recuperar son los nombres
+originales ni el TypeScript: sigue siendo el mismo JavaScript minificado.
+
+## 9. Aviso legal
 
 Termius es software **propietario**. Este informe documenta observaciones
 técnicas para estudio e interoperabilidad en el equipo del autor. **No se
